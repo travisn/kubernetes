@@ -3315,10 +3315,6 @@ message RookVolumeSource {
   // +optional
   optional bool readOnly = 4;
 
-  // Cluster is the name of the rook cluster. Default is rook.
-  // +optional
-  optional string cluster = 5;
-
   // Extra Rook metadata if any.
   // +optional
   map<string, string> volumeMetadata = 10;

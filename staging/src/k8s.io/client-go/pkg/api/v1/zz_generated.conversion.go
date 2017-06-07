@@ -4290,7 +4290,6 @@ func autoConvert_v1_RookVolumeSource_To_api_RookVolumeSource(in *RookVolumeSourc
 	out.VolumeGroup = in.VolumeGroup
 	out.FSType = in.FSType
 	out.ReadOnly = in.ReadOnly
-	out.Cluster = in.Cluster
 	out.VolumeMetadata = *(*map[string]string)(unsafe.Pointer(&in.VolumeMetadata))
 	return nil
 }
@@ -4305,7 +4304,6 @@ func autoConvert_api_RookVolumeSource_To_v1_RookVolumeSource(in *api.RookVolumeS
 	out.VolumeGroup = in.VolumeGroup
 	out.FSType = in.FSType
 	out.ReadOnly = in.ReadOnly
-	out.Cluster = in.Cluster
 	out.VolumeMetadata = *(*map[string]string)(unsafe.Pointer(&in.VolumeMetadata))
 	return nil
 }
