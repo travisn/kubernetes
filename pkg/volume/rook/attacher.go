@@ -38,26 +38,25 @@ type rookAttacher struct {
 }
 
 const (
-	tprGroup              = "rook.io"
-	tprVersion            = "v1"
-	tprKind               = "Volumeattach"
-	volumeAttachConfigMap = "rook-volume-attach"
-	devicePathKey         = "devicePath"
-	mountOptionsKey       = "mountOptions"
-	checkSleepDuration    = time.Second
+	tprGroup           = "rook.io"
+	tprVersion         = "v1"
+	tprKind            = "Volumeattach"
+	devicePathKey      = "devicePath"
+	mountOptionsKey    = "mountOptions"
+	checkSleepDuration = time.Second
 )
 
 var _ volume.Attacher = &rookAttacher{}
 
 // Attach maps a rook volume to the host and returns the attachment ID.
 func (attacher *rookAttacher) Attach(spec *volume.Spec, nodeName types.NodeName) (string, error) {
-	volumeSource, _, err := getVolumeSource(spec)
+	volumeSource, clusterName, _, err := getVolumeInfo(attacher.host.GetKubeClient(), spec)
 	if err != nil {
 		return "", err
 	}
 
 	// Create a VolumeAttach TPR instance
-	tprName := generateTPRName(volumeSource.Cluster, volumeSource.VolumeGroup, volumeSource.VolumeID, string(nodeName))
+	tprName := generateTPRName(clusterName, volumeSource.VolumeGroup, volumeSource.VolumeID, string(nodeName))
 	volumeAttach := &VolumeAttach{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: tprName,
@@ -77,7 +76,7 @@ func (attacher *rookAttacher) Attach(spec *volume.Spec, nodeName types.NodeName)
 
 	var result VolumeAttach
 	body, _ := json.Marshal(volumeAttach)
-	uri := fmt.Sprintf("apis/%s/%s/namespaces/%s/%s", tprGroup, tprVersion, volumeSource.Cluster, attachmentPluralResources)
+	uri := fmt.Sprintf("apis/%s/%s/namespaces/%s/%s", tprGroup, tprVersion, clusterName, attachmentPluralResources)
 
 	glog.V(4).Infof("Rook: Creating TPR %s.", body)
 	err = attacher.host.GetKubeClient().Core().RESTClient().Post().
@@ -117,12 +116,12 @@ func (attacher *rookAttacher) VolumesAreAttached(specs []*volume.Spec, nodeName 
 
 	volumesAttachedCheck := make(map[*volume.Spec]bool)
 	for _, spec := range specs {
-		volumeSource, _, err := getVolumeSource(spec)
+		volumeSource, clusterName, _, err := getVolumeInfo(attacher.host.GetKubeClient(), spec)
 		if err != nil {
 			glog.Errorf("Error getting volume (%q) source : %v", spec.Name(), err)
 			continue
 		}
-		tprName := generateTPRName(volumeSource.Cluster, volumeSource.VolumeGroup, volumeSource.VolumeID, string(nodeName))
+		tprName := generateTPRName(clusterName, volumeSource.VolumeGroup, volumeSource.VolumeID, string(nodeName))
 		_, ok := volumesAttached[tprName]
 		volumesAttachedCheck[spec] = ok
 	}
@@ -135,7 +134,7 @@ func (attacher *rookAttacher) WaitForAttach(spec *volume.Spec, tprName string, t
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	volumeSource, _, err := getVolumeSource(spec)
+	volumeSource, clusterName, _, err := getVolumeInfo(attacher.host.GetKubeClient(), spec)
 	if err != nil {
 		return "", err
 	}
@@ -145,7 +144,7 @@ func (attacher *rookAttacher) WaitForAttach(spec *volume.Spec, tprName string, t
 		case <-ticker.C:
 			glog.V(5).Infof("Rook: Fetching TPR %s.", tprName)
 			volumeAttachTPR := VolumeAttach{}
-			uri := fmt.Sprintf("apis/%s/%s/namespaces/%s/%s", tprGroup, tprVersion, volumeSource.Cluster, attachmentPluralResources)
+			uri := fmt.Sprintf("apis/%s/%s/namespaces/%s/%s", tprGroup, tprVersion, clusterName, attachmentPluralResources)
 			err = attacher.host.GetKubeClient().Core().RESTClient().Get().
 				RequestURI(uri).
 				Name(tprName).
@@ -156,11 +155,7 @@ func (attacher *rookAttacher) WaitForAttach(spec *volume.Spec, tprName string, t
 			}
 			if volumeAttachTPR.Status.State != VolumeAttachStatePending {
 				if volumeAttachTPR.Status.State == VolumeAttachStateAttached {
-					configmaps, err := attacher.host.GetKubeClient().Core().ConfigMaps(volumeSource.Cluster).Get(volumeAttachConfigMap, metav1.GetOptions{})
-					if err != nil {
-						return "", fmt.Errorf("Rook: Unable to get configmap %s: %v", volumeAttachConfigMap, err)
-					}
-					return configmaps.Data[fmt.Sprintf("%s.%s", tprName, devicePathKey)], nil
+					return volumeAttachTPR.Status.Name, nil
 				}
 				return "", fmt.Errorf("Rook: Volume Attached TPR %s failed: %s", tprName, volumeAttachTPR.Status.Message)
 			}
@@ -171,12 +166,12 @@ func (attacher *rookAttacher) WaitForAttach(spec *volume.Spec, tprName string, t
 }
 
 func (attacher *rookAttacher) GetDeviceMountPath(spec *volume.Spec) (string, error) {
-	volumeSource, _, err := getVolumeSource(spec)
+	volumeSource, clusterName, _, err := getVolumeInfo(attacher.host.GetKubeClient(), spec)
 	if err != nil {
 		return "", err
 	}
 
-	devName := generateVolumeName(volumeSource.Cluster, volumeSource.VolumeGroup, volumeSource.VolumeID)
+	devName := generateVolumeName(clusterName, volumeSource.VolumeGroup, volumeSource.VolumeID)
 	return makeGlobalPDName(attacher.host, devName), nil
 }
 
@@ -207,18 +202,6 @@ func (attacher *rookAttacher) MountDevice(spec *volume.Spec, devicePath string, 
 		diskMounter := &mount.SafeFormatAndMount{Interface: mounter, Runner: exec.New()}
 		mountOptions := volume.MountOptionFromSpec(spec, options...)
 		mountOptions = volume.JoinMountOptions(mountOptions, options)
-
-		// Get extra mounting option from the rook configmap (if any)
-		configmaps, err := attacher.host.GetKubeClient().Core().ConfigMaps(volumeSource.Cluster).Get(volumeAttachConfigMap, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("Rook: Unable to get configmap %s: %v", volumeAttachConfigMap, err)
-		}
-
-		tprName := generateTPRName(volumeSource.Cluster, volumeSource.VolumeGroup, volumeSource.VolumeID, attacher.host.GetHostName())
-		extraOptions := configmaps.Data[fmt.Sprintf("%s.%s", tprName, mountOptionsKey)]
-		if extraOptions != "" {
-			mountOptions = volume.JoinMountOptions(strings.Split(",", extraOptions), mountOptions)
-		}
 
 		err = diskMounter.FormatAndMount(devicePath, deviceMountPath, volumeSource.FSType, mountOptions)
 		if err != nil {

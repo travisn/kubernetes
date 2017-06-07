@@ -948,7 +948,6 @@ func printRookVolumeSource(rook *api.RookVolumeSource, w PrefixWriter) {
 		"    VolumeGroup:\t%v\n"+
 		"    FSType:\t%v\n"+
 		"    ReadOnly:\t%v\n"+
-		"    Cluster:\t%v\n"+
 		"    VolumeMetadata:\t%v\n",
 		rook.VolumeID, rook.VolumeGroup, rook.FSType, rook.ReadOnly, rook.Cluster, rook.VolumeMetadata)
 }

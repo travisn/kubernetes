@@ -37,6 +37,7 @@ type VolumeAttachSpec struct {
 
 type VolumeAttachStatus struct {
 	State   VolumeAttachState `json:"state,omitempty"`
+	Name    string            `json:"name,omitempty"`
 	Message string            `json:"message,omitempty"`
 }
 

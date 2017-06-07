@@ -373,7 +373,4 @@ func SetDefaults_ScaleIOVolumeSource(obj *ScaleIOVolumeSource) {
 }
 
 func SetDefaults_RookVolumeSource(obj *RookVolumeSource) {
-	if obj.Cluster == "" {
-		obj.Cluster = "rook"
-	}
 }

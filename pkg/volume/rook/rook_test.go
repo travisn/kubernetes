@@ -100,7 +100,6 @@ func TestPlugin(t *testing.T) {
 			Rook: &v1.RookVolumeSource{
 				VolumeID:    "vol123",
 				VolumeGroup: "mygroup",
-				Cluster:     "rook",
 				FSType:      "ext4",
 			},
 		},

@@ -23,9 +23,10 @@ import (
 	rstring "strings"
 
 	"github.com/golang/glog"
-
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/api/v1"
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/util/strings"
 	"k8s.io/kubernetes/pkg/volume"
@@ -102,11 +103,12 @@ func (plugin *rookPlugin) GetPluginName() string {
 }
 
 func (plugin *rookPlugin) GetVolumeName(spec *volume.Spec) (string, error) {
-	volumeSource, _, err := getVolumeSource(spec)
+	volumeSource, clusterName, _, err := getVolumeInfo(plugin.host.GetKubeClient(), spec)
 	if err != nil {
 		return "", err
 	}
-	return generateVolumeName(volumeSource.Cluster, volumeSource.VolumeGroup, volumeSource.VolumeID), nil
+
+	return generateVolumeName(clusterName, volumeSource.VolumeGroup, volumeSource.VolumeID), nil
 }
 
 func (plugin *rookPlugin) CanSupport(spec *volume.Spec) bool {
@@ -122,7 +124,7 @@ func (plugin *rookPlugin) NewMounter(spec *volume.Spec, pod *v1.Pod, _ volume.Vo
 }
 
 func (plugin *rookPlugin) newMounterInternal(spec *volume.Spec, podUID types.UID) (volume.Mounter, error) {
-	volumeSource, readOnly, err := getVolumeSource(spec)
+	volumeSource, clusterName, readOnly, err := getVolumeInfo(plugin.host.GetKubeClient(), spec)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +135,7 @@ func (plugin *rookPlugin) newMounterInternal(spec *volume.Spec, podUID types.UID
 			pvName:          spec.Name(),
 			volumeID:        volumeSource.VolumeID,
 			volumeGroup:     volumeSource.VolumeGroup,
-			cluster:         volumeSource.Cluster,
+			cluster:         clusterName,
 			mounter:         plugin.host.GetMounter(),
 			plugin:          plugin,
 			MetricsProvider: volume.NewMetricsStatFS(getPath(podUID, spec.Name(), plugin.host)),
@@ -255,7 +257,7 @@ func (plugin *rookPlugin) ConstructVolumeSpec(volumeName, mountPath string) (*vo
 		Name: volumeName,
 		VolumeSource: v1.VolumeSource{
 			Rook: &v1.RookVolumeSource{
-				Cluster:     volumeSource[0],
+				//Cluster:     volumeSource[0],
 				VolumeGroup: volumeSource[1],
 				VolumeID:    volumeSource[2],
 			},
@@ -284,6 +286,20 @@ func (plugin *rookPlugin) GetAccessModes() []v1.PersistentVolumeAccessMode {
 	}
 }
 
+func getVolumeInfo(client clientset.Interface, spec *volume.Spec) (*v1.RookVolumeSource, string, bool, error) {
+	source, readonly, err := getVolumeSource(spec)
+	if err != nil {
+		glog.Errorf("invalid volume source. %+v", err)
+		return nil, "", false, err
+	}
+	clusterName, err := getClusterName(client, spec)
+	if err != nil {
+		glog.Errorf("failed to retrieve storage class. %+v", err)
+		return nil, "", false, err
+	}
+	return source, clusterName, readonly, nil
+}
+
 func getVolumeSource(spec *volume.Spec) (*v1.RookVolumeSource, bool, error) {
 	if spec.Volume != nil && spec.Volume.Rook != nil {
 		return spec.Volume.Rook, spec.Volume.Rook.ReadOnly, nil
@@ -291,7 +307,23 @@ func getVolumeSource(spec *volume.Spec) (*v1.RookVolumeSource, bool, error) {
 		spec.PersistentVolume.Spec.Rook != nil {
 		return spec.PersistentVolume.Spec.Rook, spec.ReadOnly, nil
 	}
+
 	return nil, false, fmt.Errorf("Spec does not reference a Rook volume type")
+}
+
+func getClusterName(client clientset.Interface, spec *volume.Spec) (string, error) {
+	name := spec.PersistentVolume.Spec.StorageClassName
+
+	sc, err := client.Storage().StorageClasses().Get(name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	clusterName, ok := sc.Parameters["clusterName"]
+	if !ok {
+		// return the default cluster name
+		return "rook", nil
+	}
+	return clusterName, nil
 }
 
 func (b *rookMounter) CanMount() error {
